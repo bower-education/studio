@@ -49,10 +49,17 @@
   button.rec{background:var(--coral);color:#fff;flex:1.4;}
   button.stop{background:#fff;color:var(--coral);}
   button:disabled{opacity:.4;}
-  .sliders{display:flex;gap:16px;align-items:center;justify-content:center;font-size:12px;color:var(--cream);}
-  .sliders label{display:flex;align-items:center;gap:7px;}
-  input[type=range]{width:33vw;accent-color:var(--coral);}
+  .sliders{display:flex;flex-direction:column;align-items:stretch;gap:11px;font-size:14px;color:var(--cream);}
+  .sliders > label{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+  .sliders > .chk{display:flex;align-items:center;justify-content:flex-start;gap:8px;}
+  input[type=range]{width:55vw;max-width:280px;accent-color:var(--coral);}
+  .sliders input[type=number]{width:78px;font-family:inherit;font-size:16px;padding:9px;background:#15110b;color:var(--cream);border:1.5px solid var(--terracotta);text-align:center;}
   .chk{display:flex;align-items:center;gap:6px;}
+  #beat{width:14px;height:14px;border-radius:50%;background:var(--terracotta);opacity:.25;}
+  #beat.on{opacity:1;background:var(--coral);box-shadow:0 0 10px var(--coral);}
+  .presets{display:flex;gap:8px;justify-content:flex-start;}
+  .bpmp{flex:0 0 auto;padding:10px 16px;font-size:15px;font-weight:700;background:transparent;color:var(--cream);border:1.5px solid var(--terracotta);}
+  .bpmp.active{background:var(--coral);color:#fff;border-color:var(--coral);}
 
   /* script editor */
   #drawer{position:fixed;inset:0;z-index:40;background:rgba(20,16,11,.98);display:none;
@@ -82,7 +89,14 @@
 
 <div id="bar">
   <div class="sliders">
-    <label>Speed <input type="range" id="speed" min="10" max="120" value="42"></label>
+    <label>BPM <input type="number" id="bpm" min="40" max="160" step="1" value="120"></label>
+    <span class="presets">
+      <button type="button" class="bpmp" data-bpm="82">82</button>
+      <button type="button" class="bpmp" data-bpm="100">100</button>
+      <button type="button" class="bpmp" data-bpm="120">120</button>
+    </span>
+    <label>Syll/beat <input type="number" id="spb" min="0.5" max="8" step="0.5" value="2"></label>
+    <span class="chk"><input type="checkbox" id="metro"> Metronome <span id="beat"></span></span>
     <label>Size <input type="range" id="size" min="22" max="60" value="34"></label>
     <span class="chk"><input type="checkbox" id="mirror" checked> Mirror</span>
     <span class="chk"><input type="checkbox" id="flip"> Rear cam</span>
@@ -206,10 +220,11 @@ async function openCam(){
   if(stream){ stream.getTracks().forEach(t=>t.stop()); }
   try{
     stream=await navigator.mediaDevices.getUserMedia({
-      video:{facingMode: facing, width:{ideal:1080}, height:{ideal:1920}},
+      video:{facingMode: facing, width:{ideal:720}, height:{ideal:1280}, frameRate:{ideal:30,max:30}},
       audio:true
     });
     cam.srcObject=stream;
+    cam.play().catch(()=>{});
     $('playBtn').disabled=false; $('recBtn').disabled=false;
     $('camBtn').textContent='Camera on';
     $('hint').style.display='none';
@@ -222,23 +237,139 @@ $('flip').onchange=e=>{ facing = e.target.checked ? 'environment' : 'user'; if(s
 $('mirror').onchange=e=>cam.classList.toggle('mirror', e.target.checked);
 cam.classList.add('mirror');
 
-/* scroll */
-let scrolling=false, raf=null, pos=0, lastT=0;
+/* Paced by SYLLABLES, the unit speech actually rides on. BPM is the master tempo;
+   syllables flow at BPM x syllables-per-beat. Each line dwells in proportion to its
+   own syllables, so a dense line takes longer than a short one, the way speaking does.
+   A scrolling page can only match your AVERAGE pace, not lock each word to a click. */
+let scrolling=false, raf=null, pos=0, lastT=0, wp=0;     // wp = syllable-equivalents elapsed
+let segs=null, totalW=0, currentText='';
+let beatTimer=null, audioCtx=null, isRecording=false, metroOn=false;
+const BLANK_WEIGHT=2, LEAD_WEIGHT=3;
+
+function spbValue(){ const v=parseFloat($('spb').value); return Math.min(Math.max(isNaN(v)?2:v,0.5),8); }
+function bpmValue(){ return Math.min(Math.max(parseInt($('bpm').value,10)||82,20),220); }
+function effSylPerMin(){ return bpmValue()*spbValue(); } // syllables per minute = BPM x syll/beat
+
+function syllablesInWord(w){
+  w=(w||'').toLowerCase().replace(/[^a-z]/g,'');
+  if(w.length===0) return 0;
+  if(w.length<=3) return 1;
+  w=w.replace(/(?:[^laeiouy]es|ed|[^laeiouy]e)$/,'').replace(/^y/,'');
+  const m=w.match(/[aeiouy]{1,2}/g);
+  return m?m.length:1;
+}
+function lineSyllables(s){ return s.trim().split(/\s+/).reduce((a,w)=>a+syllablesInWord(w),0); }
+
+const MAXCHARS=28;
+function phrasify(text){
+  // break at natural punctuation first, then wrap any long clause to a short width
+  const out=[];
+  (text||'').split('\n').forEach(raw=>{
+    if(raw.trim()===''){ out.push(''); return; }
+    const clauses = raw.match(/[^,;:.!?—]+[,;:.!?—]*/g) || [raw];
+    clauses.forEach(cl=>{
+      cl=cl.trim(); if(!cl) return;
+      let line='';
+      cl.split(/\s+/).forEach(w=>{
+        if(line && (line.length+1+w.length)>MAXCHARS){ out.push(line); line=w; }
+        else line = line ? line+' '+w : w;
+      });
+      if(line) out.push(line);
+    });
+  });
+  return out;
+}
+function setScript(text){
+  currentText=text||'';
+  txt.innerHTML='';
+  phrasify(currentText).forEach(line=>{
+    const d=document.createElement('div'); d.className='ln';
+    if(line===''){ d.innerHTML='&nbsp;'; d.dataset.syl='0'; }
+    else { d.textContent=line; d.dataset.syl=String(lineSyllables(line)); }
+    txt.appendChild(d);
+  });
+  segs=null;
+}
+
+function buildSegments(){
+  inner.style.transform='translateY(0)';                 // measure at rest
+  const guidePx=$('guide').getBoundingClientRect().top;
+  const lns=[...txt.querySelectorAll('.ln')];
+  const cps=[{w:0,px:0}];
+  if(lns.length){
+    cps.push({w:LEAD_WEIGHT, px:Math.max(lns[0].getBoundingClientRect().top - guidePx, 0)});
+    let w=LEAD_WEIGHT;
+    for(let i=0;i<lns.length;i++){
+      const syl=parseInt(lns[i].dataset.syl,10)||0;
+      w += (syl>0?syl:BLANK_WEIGHT);
+      const nextPx = (i+1<lns.length) ? (lns[i+1].getBoundingClientRect().top - guidePx) : inner.scrollHeight;
+      cps.push({w:w, px:Math.max(nextPx,0)});
+    }
+  } else {
+    cps.push({w:LEAD_WEIGHT+1, px:inner.scrollHeight});
+  }
+  segs=cps; totalW=cps[cps.length-1].w;
+}
+function weightToPos(x){
+  if(!segs) return 0;
+  if(x<=0) return segs[0].px;
+  if(x>=totalW) return segs[segs.length-1].px;
+  for(let i=0;i<segs.length-1;i++){
+    const a=segs[i], b=segs[i+1];
+    if(x>=a.w && x<=b.w) return a.px + (b.w>a.w ? (x-a.w)/(b.w-a.w) : 0)*(b.px-a.px);
+  }
+  return segs[segs.length-1].px;
+}
 function frame(t){
   if(!lastT) lastT=t;
   const dt=(t-lastT)/1000; lastT=t;
-  pos += (parseInt($('speed').value,10)*1.5)*dt;
+  wp += (effSylPerMin()/60)*dt;                          // syllable-equivalents per second
+  pos = weightToPos(wp);
   inner.style.transform=`translateY(${-pos}px)`;
-  if(scrolling && pos < inner.scrollHeight){ raf=requestAnimationFrame(frame); }
+  if(scrolling && wp < totalW){ raf=requestAnimationFrame(frame); }
   else { scrolling=false; $('playBtn').textContent='Play'; }
 }
-function startScroll(){ scrolling=true; lastT=0; $('playBtn').textContent='Pause'; raf=requestAnimationFrame(frame); }
+function startScroll(){ scrolling=true; lastT=0; $('playBtn').textContent='Pause'; cancelAnimationFrame(raf); raf=requestAnimationFrame(frame); }
 function pauseScroll(){ scrolling=false; cancelAnimationFrame(raf); $('playBtn').textContent='Play'; }
-function resetScroll(){ pauseScroll(); pos=0; inner.style.transform='translateY(0)'; }
+function resetScroll(){ pauseScroll(); pos=0; wp=0; inner.style.transform='translateY(0)'; }
 $('playBtn').onclick=()=>{
   if(scrolling){ pauseScroll(); return; }
-  if(pos===0) countdown(startScroll); else startScroll();
+  if(wp===0 || (totalW && wp>=totalW)){ resetScroll(); buildSegments(); countdown(startScroll); }
+  else startScroll();
 };
+
+/* metronome — independent rhythm pulse; click auto-silenced while recording, beat keeps flashing */
+function clickSound(){
+  if(!audioCtx) return;
+  const o=audioCtx.createOscillator(), g=audioCtx.createGain();
+  o.frequency.value=1000; o.connect(g); g.connect(audioCtx.destination);
+  const now=audioCtx.currentTime;
+  g.gain.setValueAtTime(0.0001, now);
+  g.gain.exponentialRampToValueAtTime(0.5, now+0.001);
+  g.gain.exponentialRampToValueAtTime(0.0001, now+0.05);
+  o.start(now); o.stop(now+0.06);
+}
+function beatTick(){
+  const b=$('beat'); b.classList.add('on'); setTimeout(()=>b.classList.remove('on'),110);
+  if(!isRecording) clickSound();
+}
+function startMetro(){
+  if(beatTimer) clearInterval(beatTimer);
+  if(!audioCtx){ try{ audioCtx=new (window.AudioContext||window.webkitAudioContext)(); }catch(e){} }
+  if(audioCtx && audioCtx.state==='suspended') audioCtx.resume();
+  beatTick();
+  beatTimer=setInterval(beatTick, 60000/bpmValue());
+}
+function stopMetro(){ if(beatTimer){ clearInterval(beatTimer); beatTimer=null; } $('beat').classList.remove('on'); }
+$('metro').onchange=e=>{ metroOn=e.target.checked; if(metroOn) startMetro(); else stopMetro(); };
+$('bpm').onchange=()=>{ if(metroOn) startMetro(); };
+
+/* quick tempo toggles */
+function markPreset(){ const v=String(bpmValue()); document.querySelectorAll('.bpmp').forEach(b=>b.classList.toggle('active', b.dataset.bpm===v)); }
+function setBpm(v){ $('bpm').value=v; markPreset(); if(metroOn) startMetro(); }
+document.querySelectorAll('.bpmp').forEach(b=>{ b.onclick=()=>setBpm(parseInt(b.dataset.bpm,10)); });
+$('bpm').oninput=markPreset;
+markPreset();
 
 function countdown(done){
   const el=$('count'); let n=3; el.style.display='flex'; el.textContent=n;
@@ -259,6 +390,7 @@ $('recBtn').onclick=()=>{
   catch(e){ alert('Recording is not supported in this browser. Open the link in Safari.'); return; }
   recorder.ondataavailable=e=>{ if(e.data && e.data.size) chunks.push(e.data); };
   recorder.onstop=()=>{
+    isRecording=false;
     const type = recorder.mimeType || 'video/mp4';
     lastBlob=new Blob(chunks,{type});
     const ext = type.includes('mp4') ? 'mp4' : 'webm';
@@ -269,9 +401,10 @@ $('recBtn').onclick=()=>{
     $('review').style.display='flex';
     pauseScroll();
   };
-  resetScroll();
+  resetScroll(); buildSegments();
   countdown(()=>{
-    recorder.start();
+    recorder.start(1000);   // flush in 1s chunks — keeps iOS video encoder from stalling
+    isRecording=true;
     $('dot').style.display='block';
     $('recBtn').textContent='Stop'; $('recBtn').classList.add('stop');
     startScroll();
@@ -292,14 +425,14 @@ $('saveBtn').onclick=async()=>{
 $('retakeBtn').onclick=()=>{ $('review').style.display='none'; resetScroll(); };
 
 /* editor */
-$('editBtn').onclick=()=>{ $('script').value = txt.textContent || SCRIPTS.why; $('drawer').style.display='flex'; };
+$('editBtn').onclick=()=>{ $('script').value = currentText || SCRIPTS.why; $('drawer').style.display='flex'; };
 $('closeDrawer').onclick=()=>$('drawer').style.display='none';
 $('presets').onchange=e=>{ if(SCRIPTS[e.target.value]) $('script').value=SCRIPTS[e.target.value]; };
-$('useScript').onclick=()=>{ txt.textContent=$('script').value||''; $('drawer').style.display='none'; resetScroll(); };
+$('useScript').onclick=()=>{ setScript($('script').value||''); $('drawer').style.display='none'; resetScroll(); };
 
-$('size').oninput=e=>txt.style.fontSize=e.target.value+'px';
+$('size').oninput=e=>{ txt.style.fontSize=e.target.value+'px'; segs=null; };
 
-txt.textContent=SCRIPTS.why;
+setScript(SCRIPTS.why);
 </script>
 </body>
 </html>
