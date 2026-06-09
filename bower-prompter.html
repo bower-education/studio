@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="BOWER Prompter">
+<meta name="theme-color" content="#2C2218">
+<meta name="robots" content="noindex,nofollow">
+<title>BOWER Prompter</title>
+<style>
+  :root{ --cream:#FAF8F4; --charcoal:#2C2218; --terracotta:#C4956A; --coral:#E87461; --green:#4A7A3B; }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0;height:100%;background:#000;color:var(--cream);overflow:hidden;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+    -webkit-user-select:none;user-select:none;}
+  #cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000;}
+  #cam.mirror{transform:scaleX(-1);}
+
+  /* reading guide near top, close to the lens */
+  #guide{position:fixed;left:0;right:0;top:max(14%,env(safe-area-inset-top));height:2px;
+    background:linear-gradient(90deg,transparent,var(--coral),transparent);opacity:.55;z-index:5;}
+
+  /* teleprompter text (overlay only, NOT in the recording) */
+  #wrap{position:fixed;inset:0;display:flex;justify-content:center;pointer-events:none;z-index:4;}
+  #inner{width:92%;padding:42vh 0 70vh;will-change:transform;}
+  #txt{font-size:34px;line-height:1.55;font-weight:700;text-align:center;color:#fff;
+    text-shadow:0 2px 12px rgba(0,0,0,.9),0 0 3px rgba(0,0,0,.95);white-space:pre-wrap;}
+
+  /* countdown */
+  #count{position:fixed;inset:0;z-index:30;display:none;align-items:center;justify-content:center;
+    font-size:130px;font-weight:800;color:#fff;text-shadow:0 4px 30px rgba(0,0,0,.8);background:rgba(0,0,0,.3);}
+
+  /* recording dot */
+  #dot{position:fixed;top:max(20px,env(safe-area-inset-top));right:18px;z-index:20;
+    width:14px;height:14px;border-radius:50%;background:var(--coral);display:none;animation:blink 1s infinite;}
+  @keyframes blink{50%{opacity:.2;}}
+
+  /* bottom control bar */
+  #bar{position:fixed;left:0;right:0;bottom:0;z-index:25;
+    padding:12px 14px calc(14px + env(safe-area-inset-bottom));
+    background:linear-gradient(to top,rgba(20,16,11,.92),rgba(20,16,11,.55),transparent);
+    display:flex;flex-direction:column;gap:10px;}
+  .rowbtns{display:flex;gap:10px;align-items:center;justify-content:center;}
+  button{font-family:inherit;font-weight:700;font-size:16px;border:0;border-radius:0;
+    padding:14px 16px;color:var(--charcoal);background:var(--terracotta);flex:1;}
+  button.ghost{background:transparent;color:var(--cream);border:1.5px solid var(--terracotta);}
+  button.rec{background:var(--coral);color:#fff;flex:1.4;}
+  button.stop{background:#fff;color:var(--coral);}
+  button:disabled{opacity:.4;}
+  .sliders{display:flex;gap:16px;align-items:center;justify-content:center;font-size:12px;color:var(--cream);}
+  .sliders label{display:flex;align-items:center;gap:7px;}
+  input[type=range]{width:33vw;accent-color:var(--coral);}
+  .chk{display:flex;align-items:center;gap:6px;}
+
+  /* script editor */
+  #drawer{position:fixed;inset:0;z-index:40;background:rgba(20,16,11,.98);display:none;
+    flex-direction:column;gap:12px;padding:calc(20px + env(safe-area-inset-top)) 18px calc(18px + env(safe-area-inset-bottom));}
+  #drawer h1{margin:0;font-size:22px;font-weight:700;color:var(--cream);}
+  #drawer p{margin:0;font-size:13px;color:var(--terracotta);}
+  select,textarea{font-family:inherit;border:1.5px solid var(--terracotta);background:#15110b;color:var(--cream);}
+  select{font-size:15px;padding:11px;}
+  textarea{flex:1;font-size:17px;line-height:1.5;padding:14px;resize:none;-webkit-user-select:text;user-select:text;}
+
+  /* save / preview sheet */
+  #review{position:fixed;inset:0;z-index:45;background:rgba(0,0,0,.95);display:none;
+    flex-direction:column;gap:12px;padding:calc(20px + env(safe-area-inset-top)) 18px calc(18px + env(safe-area-inset-bottom));}
+  #review video{flex:1;width:100%;background:#000;object-fit:contain;}
+  #hint{position:fixed;top:max(20px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);z-index:20;
+    background:rgba(20,16,11,.85);padding:8px 14px;font-size:12px;color:var(--cream);
+    border:1px solid var(--terracotta);max-width:90%;text-align:center;}
+</style>
+</head>
+<body>
+<video id="cam" autoplay playsinline muted></video>
+<div id="guide"></div>
+<div id="wrap"><div id="inner"><div id="txt"></div></div></div>
+<div id="dot"></div>
+<div id="count"></div>
+<div id="hint">Tap <b>Camera</b> and allow access. Then <b>Play</b> to scroll, or <b>Record</b>.</div>
+
+<div id="bar">
+  <div class="sliders">
+    <label>Speed <input type="range" id="speed" min="10" max="120" value="42"></label>
+    <label>Size <input type="range" id="size" min="22" max="60" value="34"></label>
+    <span class="chk"><input type="checkbox" id="mirror" checked> Mirror</span>
+    <span class="chk"><input type="checkbox" id="flip"> Rear cam</span>
+  </div>
+  <div class="rowbtns">
+    <button id="camBtn">Camera</button>
+    <button id="editBtn" class="ghost">Script</button>
+    <button id="playBtn" disabled>Play</button>
+    <button id="recBtn" class="rec" disabled>Record</button>
+  </div>
+</div>
+
+<!-- script editor -->
+<div id="drawer">
+  <h1>Your script</h1>
+  <p>Pick a starter or paste your own. Short lines read easier.</p>
+  <select id="presets">
+    <option value="">Load a starter...</option>
+    <option value="why">1 - Why I started BOWER</option>
+    <option value="what">2 - What BOWER actually is</option>
+    <option value="concept">3 - School is a choice, not a default</option>
+  </select>
+  <textarea id="script" spellcheck="false"></textarea>
+  <div class="rowbtns">
+    <button id="useScript">Use this</button>
+    <button id="closeDrawer" class="ghost">Cancel</button>
+  </div>
+</div>
+
+<!-- review / save -->
+<div id="review">
+  <video id="preview" controls playsinline></video>
+  <div class="rowbtns">
+    <button id="saveBtn">Save to Photos</button>
+    <button id="retakeBtn" class="ghost">Retake</button>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const cam=$('cam'), inner=$('inner'), txt=$('txt');
+
+const SCRIPTS={
+why:`I pulled my son out of a system that was failing him.
+I did not have a map. No one did.
+So I built one.
+
+He tested two grades ahead and still came home shrinking.
+The school had one shape.
+He did not fit it.
+
+I found other parents in the same spot.
+Bright kids. Good families. No good options.
+
+What we needed was not another app or another tutor.
+We needed to know who to trust with our children,
+and how to put the right kids in the right room.
+
+That is BOWER.
+
+I am not a tech founder.
+I am a mom in Topanga who got tired of waiting
+for someone else to build this.
+So I built it.`,
+what:`People keep asking if BOWER is a tutoring site.
+It is not.
+
+Here is what it is. Three things.
+
+First, trust.
+Every educator clears fingerprint background checks
+at the FBI and state level.
+The same standard a public school teacher meets.
+Most platforms do a soft check and call it safe.
+We do not.
+
+Second, fit.
+Most matching is a zip code and a price.
+Ours reads how your child actually learns
+and what you actually value,
+so the educator shares your philosophy,
+not just your schedule.
+
+Third, the room.
+BOWER composes the pod.
+The right kids. The right educator. The right moment.
+
+Same goal every parent has.
+A different way to get there.`,
+concept:`Somewhere we all started believing
+that school means a building, a bell,
+and thirty kids the same age under fluorescent light.
+
+It does not.
+That is just the version we inherited.
+
+A pod is five or six kids
+and one adult who actually knows them.
+It can meet in a living room, a workshop, a garden.
+
+The funding exists.
+In a lot of states there is an account
+with your child's name on it.
+Eight thousand dollars. Sitting unused.
+
+This is not fringe.
+It is not only for rich families.
+It is what informed parents are quietly already doing.
+
+The hard part was never whether it works.
+The research settled that.
+The hard part is the moment
+you let yourself believe you are allowed to choose.
+
+You are.`
+};
+
+let stream=null, recorder=null, chunks=[], lastBlob=null, lastFile=null, facing='user';
+
+async function openCam(){
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); }
+  try{
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{facingMode: facing, width:{ideal:1080}, height:{ideal:1920}},
+      audio:true
+    });
+    cam.srcObject=stream;
+    $('playBtn').disabled=false; $('recBtn').disabled=false;
+    $('camBtn').textContent='Camera on';
+    $('hint').style.display='none';
+  }catch(e){
+    alert('Could not open the camera.\n\n'+e.message+'\n\nThis page must be opened over https (your own link), and you must allow camera + microphone. If you added it to your Home Screen and the camera will not start, open the same link in Safari instead.');
+  }
+}
+$('camBtn').onclick=openCam;
+$('flip').onchange=e=>{ facing = e.target.checked ? 'environment' : 'user'; if(stream) openCam(); };
+$('mirror').onchange=e=>cam.classList.toggle('mirror', e.target.checked);
+cam.classList.add('mirror');
+
+/* scroll */
+let scrolling=false, raf=null, pos=0, lastT=0;
+function frame(t){
+  if(!lastT) lastT=t;
+  const dt=(t-lastT)/1000; lastT=t;
+  pos += (parseInt($('speed').value,10)*1.5)*dt;
+  inner.style.transform=`translateY(${-pos}px)`;
+  if(scrolling && pos < inner.scrollHeight){ raf=requestAnimationFrame(frame); }
+  else { scrolling=false; $('playBtn').textContent='Play'; }
+}
+function startScroll(){ scrolling=true; lastT=0; $('playBtn').textContent='Pause'; raf=requestAnimationFrame(frame); }
+function pauseScroll(){ scrolling=false; cancelAnimationFrame(raf); $('playBtn').textContent='Play'; }
+function resetScroll(){ pauseScroll(); pos=0; inner.style.transform='translateY(0)'; }
+$('playBtn').onclick=()=>{
+  if(scrolling){ pauseScroll(); return; }
+  if(pos===0) countdown(startScroll); else startScroll();
+};
+
+function countdown(done){
+  const el=$('count'); let n=3; el.style.display='flex'; el.textContent=n;
+  const iv=setInterval(()=>{ n--; if(n<=0){clearInterval(iv); el.style.display='none'; done();} else el.textContent=n; },800);
+}
+
+/* recording: records the clean camera stream; the scrolling text is overlay only */
+function pickMime(){
+  const c=['video/mp4','video/mp4;codecs=h264','video/webm;codecs=vp9,opus','video/webm'];
+  for(const m of c){ if(window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m; }
+  return '';
+}
+$('recBtn').onclick=()=>{
+  if(recorder && recorder.state==='recording'){ recorder.stop(); return; }
+  const mime=pickMime();
+  chunks=[];
+  try{ recorder = mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream); }
+  catch(e){ alert('Recording is not supported in this browser. Open the link in Safari.'); return; }
+  recorder.ondataavailable=e=>{ if(e.data && e.data.size) chunks.push(e.data); };
+  recorder.onstop=()=>{
+    const type = recorder.mimeType || 'video/mp4';
+    lastBlob=new Blob(chunks,{type});
+    const ext = type.includes('mp4') ? 'mp4' : 'webm';
+    lastFile=new File([lastBlob], 'bower-reel-'+Date.now()+'.'+ext, {type});
+    $('preview').src=URL.createObjectURL(lastBlob);
+    $('dot').style.display='none';
+    $('recBtn').textContent='Record'; $('recBtn').classList.remove('stop');
+    $('review').style.display='flex';
+    pauseScroll();
+  };
+  resetScroll();
+  countdown(()=>{
+    recorder.start();
+    $('dot').style.display='block';
+    $('recBtn').textContent='Stop'; $('recBtn').classList.add('stop');
+    startScroll();
+  });
+};
+
+/* save to Photos via the share sheet (no upload, stays on device) */
+$('saveBtn').onclick=async()=>{
+  if(!lastFile) return;
+  if(navigator.canShare && navigator.canShare({files:[lastFile]})){
+    try{ await navigator.share({files:[lastFile], title:'BOWER reel'}); return; }
+    catch(e){ /* fall through to download */ }
+  }
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(lastBlob); a.download=lastFile.name; a.click();
+  alert('If a download opened instead of the share sheet, tap the share icon and choose Save Video.');
+};
+$('retakeBtn').onclick=()=>{ $('review').style.display='none'; resetScroll(); };
+
+/* editor */
+$('editBtn').onclick=()=>{ $('script').value = txt.textContent || SCRIPTS.why; $('drawer').style.display='flex'; };
+$('closeDrawer').onclick=()=>$('drawer').style.display='none';
+$('presets').onchange=e=>{ if(SCRIPTS[e.target.value]) $('script').value=SCRIPTS[e.target.value]; };
+$('useScript').onclick=()=>{ txt.textContent=$('script').value||''; $('drawer').style.display='none'; resetScroll(); };
+
+$('size').oninput=e=>txt.style.fontSize=e.target.value+'px';
+
+txt.textContent=SCRIPTS.why;
+</script>
+</body>
+</html>
