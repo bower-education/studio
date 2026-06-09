@@ -43,13 +43,16 @@
     background:linear-gradient(to top,rgba(20,16,11,.92),rgba(20,16,11,.55),transparent);
     display:flex;flex-direction:column;gap:10px;}
   .rowbtns{display:flex;gap:10px;align-items:center;justify-content:center;}
-  button{font-family:inherit;font-weight:700;font-size:16px;border:0;border-radius:0;
-    padding:14px 16px;color:var(--charcoal);background:var(--terracotta);flex:1;}
+  button{font-family:inherit;font-weight:700;font-size:14px;border:0;border-radius:0;
+    padding:11px 8px;color:var(--charcoal);background:var(--terracotta);flex:1;}
+  #gear{flex:0 0 auto;padding:11px 13px;font-size:17px;}
   button.ghost{background:transparent;color:var(--cream);border:1.5px solid var(--terracotta);}
   button.rec{background:var(--coral);color:#fff;flex:1.4;}
   button.stop{background:#fff;color:var(--coral);}
   button:disabled{opacity:.4;}
-  .sliders{display:flex;flex-direction:column;align-items:stretch;gap:11px;font-size:14px;color:var(--cream);}
+  .sliders{display:none;flex-direction:column;align-items:stretch;gap:11px;font-size:14px;color:var(--cream);
+    max-height:60vh;overflow:auto;padding-bottom:6px;}
+  .sliders.open{display:flex;}
   .sliders > label{display:flex;align-items:center;justify-content:space-between;gap:12px;}
   .sliders > .chk{display:flex;align-items:center;justify-content:flex-start;gap:8px;}
   input[type=range]{width:55vw;max-width:280px;accent-color:var(--coral);}
@@ -104,6 +107,7 @@
   <div class="rowbtns">
     <button id="camBtn">Camera</button>
     <button id="editBtn" class="ghost">Script</button>
+    <button id="gear" class="ghost" title="Settings">⚙</button>
     <button id="playBtn" disabled>Play</button>
     <button id="recBtn" class="rec" disabled>Record</button>
   </div>
@@ -329,7 +333,7 @@ function frame(t){
   if(scrolling && wp < totalW){ raf=requestAnimationFrame(frame); }
   else { scrolling=false; $('playBtn').textContent='Play'; }
 }
-function startScroll(){ scrolling=true; lastT=0; $('playBtn').textContent='Pause'; cancelAnimationFrame(raf); raf=requestAnimationFrame(frame); }
+function startScroll(){ closeSettings(); scrolling=true; lastT=0; $('playBtn').textContent='Pause'; cancelAnimationFrame(raf); raf=requestAnimationFrame(frame); }
 function pauseScroll(){ scrolling=false; cancelAnimationFrame(raf); $('playBtn').textContent='Play'; }
 function resetScroll(){ pauseScroll(); pos=0; wp=0; inner.style.transform='translateY(0)'; }
 $('playBtn').onclick=()=>{
@@ -370,6 +374,10 @@ function setBpm(v){ $('bpm').value=v; markPreset(); if(metroOn) startMetro(); }
 document.querySelectorAll('.bpmp').forEach(b=>{ b.onclick=()=>setBpm(parseInt(b.dataset.bpm,10)); });
 $('bpm').oninput=markPreset;
 markPreset();
+
+/* settings drawer toggle (keeps the screen clean while filming) */
+function closeSettings(){ const s=document.querySelector('.sliders'); if(s) s.classList.remove('open'); }
+$('gear').onclick=()=>document.querySelector('.sliders').classList.toggle('open');
 
 function countdown(done){
   const el=$('count'); let n=3; el.style.display='flex'; el.textContent=n;
